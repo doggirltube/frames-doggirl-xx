@@ -1,0 +1,95 @@
+name: Generate video frames
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  actions: write
+
+concurrency:
+  group: doggirlx-frame-pipeline
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ffmpeg and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate up to 30 videos
+        id: frames
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          VIDEO_SIGNING_SECRET: ${{ secrets.VIDEO_SIGNING_SECRET }}
+          FRAME_COUNT: "30"
+          BATCH_SIZE: "30"
+          MAX_ATTEMPTS: "5"
+        run: python processor.py
+
+      - name: Commit frame files directly to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frames/
+          if ! git diff --cached --quiet; then
+            git commit -m "Generate video frame galleries"
+            git push origin HEAD:main
+          fi
+
+      - name: Prepare clean Pages site
+        run: |
+          rm -rf _site
+          mkdir -p _site
+          cp -a frames _site/frames
+
+      - name: Upload frame galleries as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site/
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Save published gallery URLs to database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python finalize.py
+
+      - name: Start next batch automatically
+        if: steps.frames.outputs.has_more == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.FRAME_WORKFLOW_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "More videos remain, but FRAME_WORKFLOW_TOKEN is not configured."
+            echo "Create a fine-grained PAT with Actions: write and Contents: read, then save it as FRAME_WORKFLOW_TOKEN."
+            exit 1
+          fi
+          gh workflow run generate-frames.yml --ref main
