@@ -1,6 +1,13 @@
 name: Generate video frames
 
 on:
+  # Publish the browser when its code or catalog generator changes.
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+      - "generate_gallery.py"
+      - ".github/workflows/generate-frames.yml"
   workflow_dispatch:
   schedule:
     - cron: "17 */6 * * *"
@@ -17,6 +24,8 @@ concurrency:
 
 jobs:
   generate:
+    # A homepage-only change should not start processing another batch of videos.
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment:
@@ -62,11 +71,13 @@ jobs:
             git push origin HEAD:main
           fi
 
-      - name: Prepare clean Pages site
+      - name: Prepare complete Pages site
         run: |
           rm -rf _site
           mkdir -p _site
           cp -a frames _site/frames
+          cp index.html _site/index.html
+          python generate_gallery.py --frames-root frames --output _site/gallery-catalog.json
 
       - name: Upload frame galleries as Pages artifact
         uses: actions/upload-pages-artifact@v3
@@ -93,3 +104,40 @@ jobs:
             exit 1
           fi
           gh workflow run generate-frames.yml --ref main
+
+  publish-gallery:
+    # Publish only the static viewer for commits that change the viewer or catalog builder.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare complete Pages site
+        run: |
+          rm -rf _site
+          mkdir -p _site
+          cp -a frames _site/frames
+          cp index.html _site/index.html
+          python generate_gallery.py --frames-root frames --output _site/gallery-catalog.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site/
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
