@@ -50,7 +50,8 @@ class GalleryPageParser(HTMLParser):
 def natural_image_sort(filename: str) -> tuple[str, int, str]:
     match = re.search(r"(\d+)(?=\.[^.]+$)", filename)
     number = int(match.group(1)) if match else -1
-    return (Path(filename).stem.lower(), number, filename.lower())
+    base = re.sub(r"_\d+(?=\.[^.]+$)", "", filename).lower()
+    return (base, number, filename.lower())
 
 
 def main() -> None:
